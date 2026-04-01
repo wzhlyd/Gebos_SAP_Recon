@@ -183,6 +183,14 @@ def section_offsetting_pairs(diffs, cancel_df):
             ["SAP-Konto", "AccProd", "Counterparty", "ResiCurr", "GEBOS Amount", "SAP Amount", "Difference"],
             table_rows,
         ))
+        # Add insight about which accounts are involved
+        accounts = detail["SAP-Konto"].unique().tolist()
+        largest_abs = detail["Difference"].abs().max()
+        if len(accounts) > 1:
+            acct_list = " and ".join(f"`{a}`" for a in accounts[:2])
+            lines.append(f"\n> The ±{fmt_plain(largest_abs)} difference is split between accounts {acct_list} differently in each system. The customer total is consistent (net {fmt(row['Net'])}).\n")
+        elif len(detail) > 1:
+            lines.append(f"\n> Multiple rows in account `{accounts[0]}` offset each other. Net residual: {fmt(row['Net'])}.\n")
         lines.append("")
     return "\n".join(lines)
 
@@ -207,6 +215,23 @@ def section_unmatched(title, section_num, description, rows):
         ["SAP-Konto", "AccProd", "Counterparty", "Kundennr", "ResiCurr", f"{amt_col.replace('_', ' ')}", "Difference"],
         table_rows,
     ))
+    # Add insights
+    if len(rows) > 0:
+        largest = sorted_rows.iloc[0]
+        largest_diff = abs(largest["Difference"])
+        total_abs = rows["Difference"].abs().sum()
+        largest_pct = largest_diff / total_abs * 100 if total_abs > 0 else 0
+        lines.append(f"\n> The largest entry is `{largest['SAP-Konto']}` / `{largest['AccProd']}` / Kundennr `{largest['Kundennr']}` at {fmt(largest['Difference'])}, accounting for {largest_pct:.0f}% of this category's absolute total.")
+        # Note dominant account if one account has many rows
+        acct_counts = rows["SAP-Konto"].value_counts()
+        top_acct = acct_counts.index[0]
+        top_acct_count = acct_counts.iloc[0]
+        if top_acct_count > 1 and top_acct_count >= len(rows) * 0.4:
+            lines.append(f"\n> Account `{top_acct}` appears in {top_acct_count} of {len(rows)} rows in this category.")
+        # Note how many rows are immaterial (<100 EUR)
+        small_rows = rows[rows["Difference"].abs() < 100]
+        if len(small_rows) > 0:
+            lines.append(f"\n> {len(small_rows)} of {len(rows)} rows have differences below 100 EUR.")
     return "\n".join(lines)
 
 
@@ -219,11 +244,44 @@ def section_remaining(remaining):
         "In these rows, the key exists in both SAP and GEBOS, but the amounts differ. "
         "The script cannot identify offsetting patterns or determine the root cause from "
         "the reconciliation data alone.\n",
-        "### Top 30 by absolute difference\n",
     ]
-    top = remaining.copy()
-    top["_abs"] = top["Difference"].abs()
-    top = top.sort_values("_abs", ascending=False).head(30)
+    # Insight: detect rows with identical absolute differences (potential related pairs)
+    remaining = remaining.copy()
+    remaining["_abs"] = remaining["Difference"].abs()
+    abs_counts = remaining.groupby("_abs").size()
+    identical_pairs = abs_counts[abs_counts >= 2].index.tolist()
+    identical_pairs = [v for v in identical_pairs if v > 1000]  # only material
+    if identical_pairs:
+        lines.append("### Notable patterns\n")
+        for abs_val in sorted(identical_pairs, reverse=True):
+            pair_rows = remaining[remaining["_abs"].between(abs_val - 0.01, abs_val + 0.01)]
+            pair_net = pair_rows["Difference"].sum()
+            kundenrs = pair_rows["Kundennr"].unique()
+            accts = pair_rows["SAP-Konto"].unique()
+            lines.append(f"- **{len(pair_rows)} rows share an identical absolute difference of {fmt_plain(abs_val)}** "
+                         f"(net: {fmt(pair_net)}). "
+                         f"Accounts: {', '.join(f'`{a}`' for a in accts)}. "
+                         f"Customer(s): {', '.join(str(k) for k in kundenrs)}.")
+        lines.append("")
+    # Insight: dominant account
+    acct_counts = remaining["SAP-Konto"].value_counts()
+    top_acct = acct_counts.index[0]
+    top_acct_count = acct_counts.iloc[0]
+    top_acct_net = remaining[remaining["SAP-Konto"] == top_acct]["Difference"].sum()
+    if top_acct_count >= 5:
+        lines.append(f"> Account `{top_acct}` appears in {top_acct_count} of {len(remaining)} remaining rows (net: {fmt(top_acct_net)}).\n")
+    # Insight: top customer
+    kund_abs = remaining.groupby("Kundennr")["Difference"].agg(["sum", lambda x: x.abs().sum()])
+    kund_abs.columns = ["net", "gross"]
+    top_kund = kund_abs["gross"].idxmax()
+    top_kund_gross = kund_abs.loc[top_kund, "gross"]
+    top_kund_net = kund_abs.loc[top_kund, "net"]
+    total_gross = remaining["_abs"].sum()
+    top_kund_pct = top_kund_gross / total_gross * 100 if total_gross > 0 else 0
+    if top_kund_pct > 10:
+        lines.append(f"> Customer `{top_kund}` is the largest contributor: {fmt_plain(top_kund_gross)} absolute ({top_kund_pct:.0f}% of category), net {fmt(top_kund_net)}.\n")
+    lines.append("### Top 30 by absolute difference\n")
+    top = remaining.sort_values("_abs", ascending=False).head(30)
     table_rows = []
     for _, r in top.iterrows():
         table_rows.append([
@@ -252,6 +310,13 @@ def section_dimension(diffs, col_name, section_num, title, top_n=None):
     for idx, r in by_dim.iterrows():
         table_rows.append([idx, int(r["Count"]), fmt(r["Sum_Diff"])])
     lines.append(md_table([title, "Count", "Sum Diff"], table_rows))
+    # Add insight: highlight the top entry and concentration
+    if len(by_dim) > 1:
+        top_entry = by_dim.iloc[0]
+        top_name = by_dim.index[0]
+        total_abs = by_dim["Sum_Diff"].abs().sum()
+        top_pct = abs(top_entry["Sum_Diff"]) / total_abs * 100 if total_abs > 0 else 0
+        lines.append(f"\n> `{top_name}` accounts for {top_pct:.0f}% of the absolute difference across {title} ({int(top_entry['Count'])} rows, {fmt(top_entry['Sum_Diff'])}).")
     return "\n".join(lines)
 
 
