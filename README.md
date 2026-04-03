@@ -1,8 +1,8 @@
-# GEBOS_SAP_Recon — UGB Reconciliation Report
+# GEBOS_SAP_Recon — UGB & IFRS Reconciliation
 
 ## Overview
 
-Reconciles balances between **SAP** and **GEBOS** for UGB reporting by matching on 6 dimension columns via a concatenated key.
+Reconciles balances between **SAP** and **GEBOS** for **UGB** and **IFRS** reporting by matching on 6 dimension columns via a concatenated key.
 
 ## Folder Structure
 
@@ -10,15 +10,21 @@ Reconciles balances between **SAP** and **GEBOS** for UGB reporting by matching 
 GEBOS_SAP_Recon/
 ├── Input/
 │   ├── SAP_FILE_UGB.xlsb
-│   └── GEBOS_FILE_UGB.xlsx
+│   ├── SAP_IFRS_FILE.xlsb
+│   └── GEBOS_FILE.xlsx
 ├── Output/
-│   └── UGB_Reconciliation_Result.xlsx
+│   ├── UGB_Reconciliation_Result.xlsx
+│   ├── IFRS_Reconciliation_Result.xlsx
+│   ├── UGB_Difference_Analysis.md
+│   └── IFRS_Difference_Analysis.md
 ├── src/
-│   └── reconcile_ugb.py
+│   ├── reconcile_ugb.py
+│   ├── reconcile_ifrs.py
+│   └── generate_report.py
 └── .venv/
 ```
 
-## How to Run
+## How to Install
 
 **1. Create and activate virtual environment (first time only):**
 
@@ -30,35 +36,47 @@ python -m venv .venv
 **2. Install dependencies (first time only):**
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-**3. Activate venv and run the reconciliation:**
+## How to Run
 
 ```bash
 .venv\Scripts\activate
 
-python src/reconcile_ugb.py
+# Reconciliation
+python src/reconcile_ugb.py            # UGB reconciliation
+python src/reconcile_ifrs.py           # IFRS reconciliation
+
+# Difference Analysis Reports
+python src/generate_report.py          # generates both UGB and IFRS reports
+python src/generate_report.py ugb      # UGB report only
+python src/generate_report.py ifrs     # IFRS report only
 ```
 
 ## Input Files
 
 Files are auto-detected in the `/Input` folder by keyword in the filename:
-- The **SAP** file must contain `"SAP"` in its name (e.g., `SAP_FILE_UGB.xlsb`, `SAP_Jan2026.xlsb`)
-- The **GEBOS** file must contain `"GEBOS"` in its name (e.g., `GEBOS_FILE_UGB.xlsx`, `GEBOS_Q1.xlsx`)
+
+| Script | SAP Keyword | GEBOS Keyword | Description |
+|---|---|---|---|
+| `reconcile_ugb.py` | `SAP` | `GEBOS` | UGB reconciliation |
+| `reconcile_ifrs.py` | `SAP_IFRS` | `GEBOS` | IFRS reconciliation |
 
 The script will error if zero or multiple files match a keyword.
 
 | Keyword | Sheet | Headers | Description |
 |---|---|---|---|
-| `SAP` | Balances | Row 9 | SAP balances |
+| `SAP` / `SAP_IFRS` | Balances | Row 9 | SAP balances |
 | `GEBOS` | GEB_gesamt | Row 1 | GEBOS balances |
 
 ## Transformation Steps
 
+Both scripts follow the same 5-step process. The only differences are noted below.
+
 ### Step 1: Load and Prepare SAP Data
 
-1. Read sheet **Balances** from `SAP_FILE_UGB.xlsb` (headers in row 9).
+1. Read sheet **Balances** from the SAP `.xlsb` file (headers in row 9).
 2. **Exclude** the summary row where `Ledger = 'Result'`.
 3. **Format** `Account Number` from float to integer string (e.g., `1128800001.0` → `"1128800001"`).
 4. **Filter out** rows where `Account Number` starts with `6`.
@@ -79,15 +97,21 @@ The script will error if zero or multiple files match a keyword.
 
 ### Step 2: Load and Prepare GEBOS Data
 
-1. Read sheet **GEB_gesamt** from `GEBOS_FILE_UGB.xlsx` (headers in row 1).
+1. Read sheet **GEB_gesamt** from the GEBOS `.xlsx` file (headers in row 1).
 2. **Filter out** rows where `SAP-Konto` is empty (including whitespace-only values).
 3. **Filter out** rows where `SAP-Konto` starts with `6`.
 4. **Filter out** rows where `komponente` is empty.
 5. **Convert** `Kundennr` from float to integer (e.g., `33084.0` → `33084`).
 6. **Clean** all dimension values: NaN → `""`, strip whitespace.
-7. **Cast** `GEBOS_saldo_eur_ugb` to numeric (coerce errors to 0).
-8. **Group by** 6 dimensions, **SUM** `GEBOS_saldo_eur_ugb` (equivalent to a pivot table).
+7. **Cast** the amount column to numeric (coerce errors to 0).
+8. **Group by** 6 dimensions, **SUM** the amount column (equivalent to a pivot table).
 9. **Build concat key** by joining all 6 dimension values into a single string.
+
+**GEBOS Amount Column:**
+| Script | Column |
+|---|---|
+| `reconcile_ugb.py` | `GEBOS_saldo_eur_ugb` |
+| `reconcile_ifrs.py` | `GEBOS_saldo_eur_ifrs` |
 
 **GEBOS Dimension Columns:**
 | Column | Maps to SAP Column |
@@ -120,9 +144,15 @@ Generate summary metrics:
 2. Write **Summary** sheet with key metrics.
 3. **Apply** `#,##0.00` number format to all amount columns.
 
-## Output File
+## Output Files
 
-`Output/UGB_Reconciliation_Result.xlsx` with 2 sheets:
+| Script | Output File |
+|---|---|
+| `reconcile_ugb.py` | `Output/UGB_Reconciliation_Result.xlsx` |
+| `reconcile_ifrs.py` | `Output/IFRS_Reconciliation_Result.xlsx` |
+| `generate_report.py` | `Output/UGB_Difference_Analysis.md` and/or `Output/IFRS_Difference_Analysis.md` |
+
+Each reconciliation `.xlsx` has 2 sheets:
 
 | Sheet | Content |
 |---|---|
@@ -136,3 +166,4 @@ Generate summary metrics:
 - **SAP filters applied before grouping**: `Ledger = 'Result'` summary row and `Account Number` starting with `6` are excluded from the raw data before aggregation.
 - **GEBOS filters applied before grouping**: Empty `SAP-Konto`, `SAP-Konto` starting with `6`, and empty `komponente` rows are excluded from the raw data before aggregation.
 - **Left join on GEBOS**: The reconciliation is GEBOS-based — every GEBOS row appears in the output; SAP rows with no GEBOS match are not included.
+- **UGB vs IFRS**: Both scripts share identical logic; the only differences are the SAP input file keyword (`SAP` vs `SAP_IFRS`) and the GEBOS amount column (`GEBOS_saldo_eur_ugb` vs `GEBOS_saldo_eur_ifrs`).

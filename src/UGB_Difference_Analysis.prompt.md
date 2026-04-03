@@ -1,22 +1,24 @@
 ---
 applyTo: "**/GEBOS_SAP_Recon/**"
 ---
-# UGB Reconciliation Difference Analysis
+# Reconciliation Difference Analysis (UGB & IFRS)
 
 ## When to use
-Use this prompt after running `reconcile_ugb.py` to produce a structured difference analysis report.
+Use this prompt after running `reconcile_ugb.py` and/or `reconcile_ifrs.py` to produce structured difference analysis reports.
 
 ## Workflow
 
-### Step 1 — Generate the data-driven report
+### Step 1 — Generate the data-driven report(s)
 Run the report generator script from the GEBOS_SAP_Recon directory:
 ```
-python src/generate_report.py
+python src/generate_report.py          # generates both UGB and IFRS
+python src/generate_report.py ugb      # generates UGB only
+python src/generate_report.py ifrs     # generates IFRS only
 ```
-This produces `Output/UGB_Difference_Analysis.md` with sections 1–7 filled in (overview, waterfall, offsetting pairs, unmatched rows, remaining, dimension breakdowns) and sections 8–9 as placeholders.
+This produces `Output/UGB_Difference_Analysis.md` and/or `Output/IFRS_Difference_Analysis.md` with sections 1–7 filled in (overview, waterfall, offsetting pairs, unmatched rows, remaining, dimension breakdowns) and sections 8–9 as placeholders.
 
 ### Step 2 — Fill in sections 8 and 9 with analyst interpretation
-Read the generated report. Then fill in the two placeholder sections using the rules below.
+Read the generated report(s). Then fill in the two placeholder sections using the rules below. Repeat for each report generated.
 
 #### Section 8: "What Cannot Be Determined From Data Alone"
 - State explicitly what questions remain unanswered from the data.
@@ -47,6 +49,7 @@ Read the generated report. Then fill in the two placeholder sections using the r
 - Do not add creative analysis beyond what the numbers directly show.
 
 ## Output format
-- Replace the placeholder text in sections 8 and 9 of the generated .MD file.
+- Replace the placeholder text in sections 8 and 9 of each generated .MD file.
 - Keep all other sections unchanged (they are auto-generated and correct).
 - Do not add or remove other sections.
+- Process each report (UGB / IFRS) independently — do not cross-reference between them.

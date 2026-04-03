@@ -1,8 +1,7 @@
 """
-Generate UGB Difference Analysis Report (.MD)
+Generate Difference Analysis Report (.MD) for UGB and/or IFRS reconciliation.
 
-Reads the reconciliation output (UGB_Reconciliation_Result.xlsx) and produces
-a structured Markdown report with:
+Reads the reconciliation output and produces a structured Markdown report with:
   1. Overview
   2. Difference waterfall (offsetting pairs, unmatched, remaining)
   3. Confirmed offsetting pairs detail
@@ -11,6 +10,12 @@ a structured Markdown report with:
   6. Remaining unexplained rows
   7. Dimension breakdowns (AccProd, Counterparty, ResiCurr, Partnerges)
   8. Placeholders for analyst commentary
+
+Usage:
+  python src/generate_report.py          # generates both UGB and IFRS
+  python src/generate_report.py ugb      # generates UGB only
+  python src/generate_report.py ifrs     # generates IFRS only
+  python src/generate_report.py both     # generates both (default)
 
 The script outputs DATA-DRIVEN sections only. Narrative interpretation
 (what is confirmed related, what is unknown) should be added by the analyst
@@ -28,15 +33,26 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = SCRIPT_DIR / "Output"
-RECON_FILE = OUTPUT_DIR / "UGB_Reconciliation_Result.xlsx"
-REPORT_FILE = OUTPUT_DIR / "UGB_Difference_Analysis.md"
 DIFF_THRESHOLD = 0.01
 CANCEL_PCT = 90  # % cancellation to qualify as offsetting pair
 
+REPORT_CONFIGS = {
+    "ugb": {
+        "recon_file": OUTPUT_DIR / "UGB_Reconciliation_Result.xlsx",
+        "report_file": OUTPUT_DIR / "UGB_Difference_Analysis.md",
+        "title": "UGB Reconciliation — Difference Analysis",
+    },
+    "ifrs": {
+        "recon_file": OUTPUT_DIR / "IFRS_Reconciliation_Result.xlsx",
+        "report_file": OUTPUT_DIR / "IFRS_Difference_Analysis.md",
+        "title": "IFRS Reconciliation — Difference Analysis",
+    },
+}
 
-def load_recon():
+
+def load_recon(recon_file):
     """Load Reconciliation sheet from output file."""
-    df = pd.read_excel(RECON_FILE, sheet_name="Reconciliation", engine="openpyxl")
+    df = pd.read_excel(recon_file, sheet_name="Reconciliation", engine="openpyxl")
     return df
 
 
@@ -361,9 +377,19 @@ def section_placeholders():
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
-    print(f"Reading {RECON_FILE.name}...", flush=True)
-    recon = load_recon()
+def generate_report(report_type):
+    """Generate a difference analysis report for the given type (ugb or ifrs)."""
+    config = REPORT_CONFIGS[report_type]
+    recon_file = config["recon_file"]
+    report_file = config["report_file"]
+    title = config["title"]
+
+    if not recon_file.exists():
+        print(f"SKIP: {recon_file.name} not found — run reconcile_{report_type}.py first.", flush=True)
+        return
+
+    print(f"\nReading {recon_file.name}...", flush=True)
+    recon = load_recon(recon_file)
     diffs = get_diffs(recon)
     print(f"  Total rows: {len(recon)}, diff rows: {len(diffs)}", flush=True)
 
@@ -375,9 +401,9 @@ def main():
     # Build report
     report_date = datetime.now().strftime("%B %Y")
     sections = []
-    sections.append(f"# UGB Reconciliation — Difference Analysis\n")
+    sections.append(f"# {title}\n")
     sections.append(f"**Date:** {report_date}  ")
-    sections.append(f"**Source:** `{RECON_FILE.name}`  ")
+    sections.append(f"**Source:** `{recon_file.name}`  ")
     sections.append(f"**Threshold:** Differences > {DIFF_THRESHOLD} EUR\n")
     sections.append("---\n")
 
@@ -416,9 +442,21 @@ def main():
     # Write
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     report_text = "\n".join(sections)
-    REPORT_FILE.write_text(report_text, encoding="utf-8")
-    print(f"Report written to {REPORT_FILE.name}", flush=True)
+    report_file.write_text(report_text, encoding="utf-8")
+    print(f"Report written to {report_file.name}", flush=True)
     print(f"  Sections 8 & 9 are placeholders for analyst/AI commentary.", flush=True)
+
+
+def main():
+    target = sys.argv[1].lower() if len(sys.argv) > 1 else "both"
+    valid = list(REPORT_CONFIGS.keys()) + ["both"]
+    if target not in valid:
+        print(f"Usage: python src/generate_report.py [{' | '.join(valid)}]")
+        sys.exit(1)
+
+    types = list(REPORT_CONFIGS.keys()) if target == "both" else [target]
+    for t in types:
+        generate_report(t)
 
 
 if __name__ == "__main__":
