@@ -1,8 +1,13 @@
+# Python
 .venv/
 __pycache__/
 
-
-Input/
-Output/
+# Logs
 push.log
+
+# Keep Input/ and Output/ folders, but ignore their contents
+Input/*
+!Input/.gitkeep
+Output/*
+!Output/.gitkeep
 
