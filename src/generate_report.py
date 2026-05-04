@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import source_checks
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -176,7 +177,7 @@ def section_waterfall(diffs, cancel_kundenrs, gebos_only, sap_only):
     return "\n".join(lines), remaining
 
 
-def section_offsetting_pairs(diffs, cancel_df):
+def section_offsetting_pairs(diffs, cancel_df, src=None):
     """§3 Confirmed offsetting pairs."""
     lines = [
         "## 3. Confirmed Offsetting Pairs (Category A)\n",
@@ -208,10 +209,25 @@ def section_offsetting_pairs(diffs, cancel_df):
         elif len(detail) > 1:
             lines.append(f"\n> Multiple rows in account `{accounts[0]}` offset each other. Net residual: {fmt(row['Net'])}.\n")
         lines.append("")
+    # Source-data findings for offsetting pairs
+    if src:
+        g_grp, s_grp = src["g_grp"], src["s_grp"]
+        lines.append("### Source-Data Findings\n")
+        for kund in cancel_df.index:
+            ct = source_checks.check_customer_total(kund, g_grp, s_grp)
+            if ct["matches"]:
+                lines.append(f"> **Kundennr `{kund}`:** Customer-level total confirmed matching "
+                             f"(GEBOS={ct['gebos_total']:,.2f}, SAP={ct['sap_total']:,.2f}). "
+                             f"Differences are account-level allocation only.")
+            else:
+                lines.append(f"> **Kundennr `{kund}`:** Customer-level total differs by {ct['diff']:+,.2f} "
+                             f"(GEBOS={ct['gebos_total']:,.2f}, SAP={ct['sap_total']:,.2f}).")
+        lines.append("")
+    lines.append("\n**AI Analysis:** _To be filled in by the AI after reviewing the offsetting pairs above._\n")
     return "\n".join(lines)
 
 
-def section_unmatched(title, section_num, description, rows):
+def section_unmatched(title, section_num, description, rows, src=None, side=None):
     """§4 or §5 — GEBOS-only or SAP-only."""
     total = rows["Difference"].sum()
     lines = [
@@ -248,10 +264,20 @@ def section_unmatched(title, section_num, description, rows):
         small_rows = rows[rows["Difference"].abs() < 100]
         if len(small_rows) > 0:
             lines.append(f"\n> {len(small_rows)} of {len(rows)} rows have differences below 100 EUR.")
+    # Source-data findings: key mismatch checks
+    if src and side:
+        g_grp, s_grp = src["g_grp"], src["s_grp"]
+        lines.append("\n### Source-Data Findings\n")
+        for _, r in sorted_rows.iterrows():
+            finding = source_checks.check_key_mismatch(r, side, g_grp, s_grp)
+            if finding:
+                lines.append(f"> **`{r['SAP-Konto']}` / `{r['AccProd']}` / Kundennr `{r['Kundennr']}`:** {finding}")
+        lines.append("")
+    lines.append(f"\n**AI Analysis:** _To be filled in by the AI after reviewing the {title.split('\u2014')[0].strip().lower()} rows above._\n")
     return "\n".join(lines)
 
 
-def section_remaining(remaining):
+def section_remaining(remaining, src=None):
     """§6 Remaining unexplained."""
     net = remaining["Difference"].sum()
     lines = [
@@ -308,6 +334,59 @@ def section_remaining(remaining):
         ["SAP-Konto", "AccProd", "Counterparty", "Kundennr", "ResiCurr", "GEBOS Amount", "SAP Amount", "Difference"],
         table_rows,
     ))
+    # Source-data findings: raw total checks + cross-customer offsets
+    if src:
+        gebos_raw, sap_raw = src["gebos_raw"], src["sap_raw"]
+        g_grp, s_grp = src["g_grp"], src["s_grp"]
+        amt_col_g = src["amt_col_g"]
+        lines.append("\n### Source-Data Findings\n")
+        # Per-row raw-total checks for material diffs (>100 EUR)
+        material = remaining[remaining["_abs"] > 100].sort_values("_abs", ascending=False)
+        for _, r in material.iterrows():
+            rt = source_checks.check_raw_totals(r, gebos_raw, sap_raw, amt_col_g)
+            lines.append(
+                f"> **`{r['SAP-Konto']}` / `{r['AccProd']}` / Kundennr `{r['Kundennr']}`** (diff {fmt(r['Difference'])}): "
+                f"{rt['finding']}"
+            )
+        # Cross-customer offset checks for identical-abs pairs
+        if identical_pairs:
+            lines.append("")
+            for abs_val in sorted(identical_pairs, reverse=True):
+                pair_rows = remaining[remaining["_abs"].between(abs_val - 0.01, abs_val + 0.01)]
+                kundenrs = sorted(pair_rows["Kundennr"].unique().tolist())
+                if len(kundenrs) == 2:
+                    xc = source_checks.check_cross_customer(kundenrs[0], kundenrs[1], g_grp, s_grp)
+                    if xc["matches"]:
+                        lines.append(
+                            f"> **Cross-customer check `{kundenrs[0]}` + `{kundenrs[1]}`:** "
+                            f"Combined total MATCHES (GEBOS={xc['combined_g']:,.2f}, SAP={xc['combined_s']:,.2f}). "
+                            f"This is a confirmed customer-allocation issue."
+                        )
+                    else:
+                        lines.append(
+                            f"> **Cross-customer check `{kundenrs[0]}` + `{kundenrs[1]}`:** "
+                            f"Combined total still differs by {xc['combined_diff']:+,.2f}."
+                        )
+        # Customer-level totals for top contributors
+        lines.append("")
+        diff_kundens = remaining.groupby("Kundennr")["Difference"].agg(
+            gross=lambda x: x.abs().sum()
+        ).sort_values("gross", ascending=False).head(5)
+        for kn in diff_kundens.index:
+            ct = source_checks.check_customer_total(kn, g_grp, s_grp)
+            if ct["matches"]:
+                lines.append(
+                    f"> **Customer total `{kn}`:** MATCHES across systems "
+                    f"(GEBOS={ct['gebos_total']:,.2f}, SAP={ct['sap_total']:,.2f}). "
+                    f"All differences for this customer are dimension-allocation."
+                )
+            else:
+                lines.append(
+                    f"> **Customer total `{kn}`:** DIFFERS by {ct['diff']:+,.2f} "
+                    f"(GEBOS={ct['gebos_total']:,.2f}, SAP={ct['sap_total']:,.2f})."
+                )
+        lines.append("")
+    lines.append("\n**AI Analysis:** _To be filled in by the AI after reviewing the remaining unexplained rows above._\n")
     return "\n".join(lines)
 
 
@@ -364,14 +443,39 @@ def section_dimensions(diffs):
     return "\n".join(lines)
 
 
-def section_placeholders():
+def section_placeholders(has_source_data=False):
     """§8 & §9 — placeholders for analyst interpretation and next steps."""
-    return "\n".join([
-        "## 8. What Cannot Be Determined From Data Alone\n",
-        "_This section should be filled in by the analyst or AI after reviewing the data above._\n",
-        "## 9. Suggested Next Steps\n",
-        "_This section should be filled in by the analyst or AI after reviewing the data above._\n",
-    ])
+    lines = []
+    lines.append("## 8. What Cannot Be Determined From Data Alone\n")
+    if has_source_data:
+        lines.append(
+            "Source-data findings above resolve key mismatches, customer totals, "
+            "and raw-total comparisons. The following remain open:\n"
+        )
+        lines.append(
+            "_To be filled in by the analyst or AI — review the Source-Data Findings "
+            "in §3–§6 above and list what questions remain unanswered even after the "
+            "source-level checks._\n"
+        )
+    else:
+        lines.append(
+            "_This section should be filled in by the analyst or AI after reviewing "
+            "the data above._\n"
+        )
+    lines.append("## 9. Suggested Next Steps\n")
+    if has_source_data:
+        lines.append(
+            "_To be filled in by the analyst or AI — prioritize by impact, distinguish "
+            "mapping fixes (where source data confirmed the cause) from genuine amount "
+            "gaps (where transaction-level investigation is still needed). Reference "
+            "specific rows/customers from the report._\n"
+        )
+    else:
+        lines.append(
+            "_This section should be filled in by the analyst or AI after reviewing "
+            "the data above._\n"
+        )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +502,22 @@ def generate_report(report_type):
     cancel_kundenrs = cancel_df.index.tolist()
     gebos_only, sap_only = find_unmatched(diffs)
 
+    # Load source data for deeper analysis (optional — if Input files are present)
+    src = None
+    try:
+        result = source_checks.load_source(report_type)
+        if result:
+            gebos_raw, sap_raw, g_grp, s_grp, amt_col_g = result
+            src = {
+                "gebos_raw": gebos_raw, "sap_raw": sap_raw,
+                "g_grp": g_grp, "s_grp": s_grp, "amt_col_g": amt_col_g,
+            }
+            print("  Source data loaded — embedding source-data findings.", flush=True)
+        else:
+            print("  Source Input files not found — report will have placeholders only.", flush=True)
+    except Exception as e:
+        print(f"  WARNING: Could not load source data ({e}) — continuing without.", flush=True)
+
     # Build report
     report_date = datetime.now().strftime("%B %Y")
     sections = []
@@ -414,30 +534,30 @@ def generate_report(report_type):
     sections.append(waterfall_text)
     sections.append("\n---\n")
 
-    sections.append(section_offsetting_pairs(diffs, cancel_df))
+    sections.append(section_offsetting_pairs(diffs, cancel_df, src=src))
     sections.append("\n---\n")
 
     sections.append(section_unmatched(
         "GEBOS-Only Rows — No SAP Match (Category B)", 4,
         f"These {len(gebos_only)} rows have a GEBOS balance but no corresponding key in SAP.",
-        gebos_only,
+        gebos_only, src=src, side="gebos_only",
     ))
     sections.append("\n---\n")
 
     sections.append(section_unmatched(
         "SAP-Only Rows — No GEBOS Match (Category C)", 5,
         f"These {len(sap_only)} rows have a SAP balance but no corresponding key in GEBOS.",
-        sap_only,
+        sap_only, src=src, side="sap_only",
     ))
     sections.append("\n---\n")
 
-    sections.append(section_remaining(remaining))
+    sections.append(section_remaining(remaining, src=src))
     sections.append("\n---\n")
 
     sections.append(section_dimensions(diffs))
     sections.append("\n---\n")
 
-    sections.append(section_placeholders())
+    sections.append(section_placeholders(has_source_data=src is not None))
 
     # Write
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

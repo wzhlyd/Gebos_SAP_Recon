@@ -9,18 +9,22 @@ Reconciles balances between **SAP** and **GEBOS** for **UGB** and **IFRS** repor
 ```
 GEBOS_SAP_Recon/
 ├── Input/
-│   ├── SAP_FILE_UGB.xlsb
-│   ├── SAP_IFRS_FILE.xlsb
-│   └── GEBOS_FILE.xlsx
+│   ├── SAP_UGB_<date>.xlsm
+│   ├── SAP_IFRS_<date>.xlsm
+│   ├── GEBOS_..._UGB_..._<date>.xlsx
+│   └── GEBOS_..._IFRS_..._<date>.xlsx
 ├── Output/
 │   ├── UGB_Reconciliation_Result.xlsx
 │   ├── IFRS_Reconciliation_Result.xlsx
 │   ├── UGB_Difference_Analysis.md
 │   └── IFRS_Difference_Analysis.md
 ├── src/
+│   ├── reconcile.py
 │   ├── reconcile_ugb.py
 │   ├── reconcile_ifrs.py
-│   └── generate_report.py
+│   ├── generate_report.py
+│   ├── source_checks.py
+│   └── Difference_Analysis.prompt.md
 └── .venv/
 ```
 
@@ -44,11 +48,16 @@ python -m pip install -r requirements.txt
 ```bash
 .venv\Scripts\activate
 
-# Reconciliation
-python src/reconcile_ugb.py            # UGB reconciliation
-python src/reconcile_ifrs.py           # IFRS reconciliation
+# Unified (reconciliation + report in one step)
+python src/reconcile.py              # runs both UGB and IFRS
+python src/reconcile.py ugb           # UGB only
+python src/reconcile.py ifrs          # IFRS only
 
-# Difference Analysis Reports
+# Individual scripts
+python src/reconcile_ugb.py            # UGB reconciliation only
+python src/reconcile_ifrs.py           # IFRS reconciliation only
+
+# Difference Analysis Reports (standalone)
 python src/generate_report.py          # generates both UGB and IFRS reports
 python src/generate_report.py ugb      # UGB report only
 python src/generate_report.py ifrs     # IFRS report only
@@ -58,17 +67,17 @@ python src/generate_report.py ifrs     # IFRS report only
 
 Files are auto-detected in the `/Input` folder by keyword in the filename:
 
-| Script | SAP Keyword | GEBOS Keyword | Description |
+| Script | SAP Keywords | GEBOS Keywords | Description |
 |---|---|---|---|
-| `reconcile_ugb.py` | `SAP` | `GEBOS` | UGB reconciliation |
-| `reconcile_ifrs.py` | `SAP_IFRS` | `GEBOS` | IFRS reconciliation |
+| `reconcile_ugb.py` | `SAP` + `UGB` | `GEBOS` + `UGB` | UGB reconciliation |
+| `reconcile_ifrs.py` | `SAP` + `IFRS` | `GEBOS` + `IFRS` | IFRS reconciliation |
 
-The script will error if zero or multiple files match a keyword.
+All keywords must be present in the filename (case-insensitive). This allows both UGB and IFRS files to coexist in the Input folder without conflicts.
 
-| Keyword | Sheet | Headers | Description |
+| Source | Sheet | Headers | Description |
 |---|---|---|---|
-| `SAP` / `SAP_IFRS` | Balances | Row 9 | SAP balances |
-| `GEBOS` | GEB_gesamt | Row 1 | GEBOS balances |
+| SAP (`.xlsm`) | Balances | Row 9 | SAP balances |
+| GEBOS (`.xlsx`) | GEB_gesamt | Row 1 | GEBOS balances |
 
 ## Transformation Steps
 
@@ -76,7 +85,7 @@ Both scripts follow the same 5-step process. The only differences are noted belo
 
 ### Step 1: Load and Prepare SAP Data
 
-1. Read sheet **Balances** from the SAP `.xlsb` file (headers in row 9).
+1. Read sheet **Balances** from the SAP `.xlsm` file (headers in row 9).
 2. **Exclude** the summary row where `Ledger = 'Result'`.
 3. **Format** `Account Number` from float to integer string (e.g., `1128800001.0` → `"1128800001"`).
 4. **Filter out** rows where `Account Number` starts with `6`.
@@ -166,4 +175,4 @@ Each reconciliation `.xlsx` has 2 sheets:
 - **SAP filters applied before grouping**: `Ledger = 'Result'` summary row and `Account Number` starting with `6` are excluded from the raw data before aggregation.
 - **GEBOS filters applied before grouping**: Empty `SAP-Konto`, `SAP-Konto` starting with `6`, and empty `komponente` rows are excluded from the raw data before aggregation.
 - **Left join on GEBOS**: The reconciliation is GEBOS-based — every GEBOS row appears in the output; SAP rows with no GEBOS match are not included.
-- **UGB vs IFRS**: Both scripts share identical logic; the only differences are the SAP input file keyword (`SAP` vs `SAP_IFRS`) and the GEBOS amount column (`GEBOS_saldo_eur_ugb` vs `GEBOS_saldo_eur_ifrs`).
+- **UGB vs IFRS**: Both scripts share identical logic; the only differences are the input file keywords (`SAP` + `UGB` / `GEBOS` + `UGB` vs `SAP` + `IFRS` / `GEBOS` + `IFRS`) and the GEBOS amount column (`GEBOS_saldo_eur_ugb` vs `GEBOS_saldo_eur_ifrs`).

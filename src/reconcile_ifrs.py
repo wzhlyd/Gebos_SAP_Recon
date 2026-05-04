@@ -4,8 +4,8 @@ Compares balances from SAP (Balances sheet, Ledger='0L') and GEBOS (GEB_gesamt s
 by matching on 6 dimension columns via a concatenated key.
 
 Input files (in /Input folder):
-  - File with "SAP_IFRS" in name → Sheet "Balances", headers in row 9
-  - File with "GEBOS" in name   → Sheet "GEB_gesamt", headers in row 1
+  - File with "SAP" + "IFRS" in name → Sheet "Balances", headers in row 9
+  - File with "GEBOS" + "IFRS" in name → Sheet "GEB_gesamt", headers in row 1
 
 Output:
   - IFRS_Reconciliation_Result.xlsx
@@ -23,21 +23,27 @@ SCRIPT_DIR = Path(__file__).resolve().parent.parent
 INPUT_DIR = SCRIPT_DIR / "Input"
 OUTPUT_FILE = SCRIPT_DIR / "Output" / "IFRS_Reconciliation_Result.xlsx"
 
-SAP_KEYWORD = "SAP_IFRS"
-GEBOS_KEYWORD = "GEBOS"
+SAP_KEYWORDS = ["SAP", "IFRS"]
+GEBOS_KEYWORDS = ["GEBOS", "IFRS"]
 
 
-def find_input_file(keyword):
-    """Find a single file in INPUT_DIR whose name contains the keyword (case-insensitive)."""
-    matches = [f for f in INPUT_DIR.iterdir() if f.is_file() and keyword.lower() in f.name.lower()]
+def find_input_file(keywords):
+    """Find a single file in INPUT_DIR whose name contains ALL keywords (case-insensitive)."""
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    matches = [
+        f for f in INPUT_DIR.iterdir()
+        if f.is_file() and all(kw.lower() in f.name.lower() for kw in keywords)
+    ]
+    label = " + ".join(keywords)
     if len(matches) == 0:
-        print(f"ERROR: No file with '{keyword}' in name found in {INPUT_DIR}")
+        print(f"ERROR: No file with [{label}] in name found in {INPUT_DIR}")
         sys.exit(1)
     if len(matches) > 1:
         names = [f.name for f in matches]
-        print(f"ERROR: Multiple files with '{keyword}' in name found in {INPUT_DIR}: {names}")
+        print(f"ERROR: Multiple files with [{label}] in name found in {INPUT_DIR}: {names}")
         sys.exit(1)
-    print(f"  Found {keyword} file: {matches[0].name}", flush=True)
+    print(f"  Found [{label}] file: {matches[0].name}", flush=True)
     return matches[0]
 
 
@@ -117,7 +123,7 @@ def format_kundennr(val):
 # ---------------------------------------------------------------------------
 def load_sap_data(sap_file):
     print("Loading SAP data...", flush=True)
-    df = pd.read_excel(sap_file, sheet_name="Balances", header=8, engine="pyxlsb")
+    df = pd.read_excel(sap_file, sheet_name="Balances", header=8, engine="openpyxl")
     print(f"  Raw rows: {len(df)}", flush=True)
 
     # Exclude summary row
@@ -283,9 +289,9 @@ def write_output(gebos_result, summary):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    # Find input files by keyword
-    sap_file = find_input_file(SAP_KEYWORD)
-    gebos_file = find_input_file(GEBOS_KEYWORD)
+    # Find input files by keywords (all must match)
+    sap_file = find_input_file(SAP_KEYWORDS)
+    gebos_file = find_input_file(GEBOS_KEYWORDS)
 
     sap_df = load_sap_data(sap_file)
     gebos_df = load_gebos_data(gebos_file)
